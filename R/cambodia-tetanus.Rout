@@ -1,0 +1,489 @@
+
+R version 3.3.2 (2016-10-31) -- "Sincere Pumpkin Patch"
+Copyright (C) 2016 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin13.4.0 (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> 
+> 
+> #----------------------------------
+> # cambodia-tetanus.R
+> #
+> # estimate age-dependent antibody
+> # curves for tetanus in cambodia
+> #----------------------------------
+> 
+> #----------------------------------
+> # input files:
+> #   cambodia_serology_public.rds
+> #
+> # output files:
+> #  cambodia-tetanus-parity-quant-seroprev.pdf
+> #----------------------------------
+> 
+> #----------------------------------
+> # preamble
+> #----------------------------------
+> 
+> rm(list=ls())
+> library(SuperLearner)
+Loading required package: nnls
+Super Learner
+Version: 2.0-21
+Package created on 2016-11-11
+
+> library(tmle)
+Welcome to the tmle package, version 1.2.0-5
+
+Use tmleNews() to see details on changes and bug fixes
+> library(tmleAb)  # this is a development package on GitHub: https://github.com/ben-arnold/tmleAb
+Welcome to the tmleAb package
+Targeted maximum likelihood estimation for antibody measurements.
+(Version 0.3.1, release date 2017-04-30)
+
+Periodically check for the latest development version using 
+devtools::install_github('ben-arnold/tmleAb')  
+
+This software is based on work funded by the
+National Institute of Allergy and Infectious Diseases
+grant K01-AI119180
+
+
+> library(scales)
+> 
+> #----------------------------------
+> # load the dataset
+> #----------------------------------
+> d <- readRDS("~/dropbox/cambodia/data/final/cambodia_serology_public.rds")
+> 
+> 
+> 
+> # recode 4 observations with negative
+> # values to 1
+> table(d$ttmb<=0)
+
+FALSE  TRUE 
+ 2146     4 
+> d$ttmb[d$ttmb<=0] <- 1
+> 
+> # create an indicator of positive based on
+> # the multiplex bead assay
+> d$ttpos <- ifelse(d$ttmb>100,1,0)
+> 
+> # create an indicator for parous vs nulliparus
+> d$parous <- ifelse(d$parity=='1:Parous',1,0)
+> 
+> # create an age category variable
+> d$agecat <- cut(d$age,breaks=c(14,19,24,29,34,39))
+> 
+> #----------------------------------
+> # estimate the quantiative
+> # age-dependent antibody
+> # curve for tetanus toxiod, 
+> # stratified by parity
+> #----------------------------------
+> 
+> SL.library <- c("SL.mean","SL.glm","SL.gam","SL.loess","SL.randomForest","SL.polymars")
+> set.seed(987325)
+> pacurve <- agecurveAb(Y=log10(d$ttmb[d$parity=='1:Parous']),Age=d$age[d$parity=='1:Parous'],
++                       W=subset(d,parity=='1:Parous',select=c("region")),
++                       id=d$psuid[d$parity=='1:Parous'],
++                       SL.library=SL.library)
+Loading required package: randomForest
+randomForest 4.6-12
+Type rfNews() to see new features/changes/bug fixes.
+Loading required package: gam
+Loading required package: splines
+Loading required package: foreach
+Loaded gam 1.14
+
+Loading required package: polspline
+
+Summary of SuperLearner cross validated risk and 
+weights for algorithms included in the library:
+
+                           CV-Risk      Coef
+SL.mean_All              0.5532984 0.0000000
+SL.glm_All               0.5331037 0.0000000
+SL.gam.df7_All           0.4398759 0.6177253
+SL.loess_All             0.4417065 0.2598030
+SL.randomForest.ns40_All 0.4805953 0.0000000
+SL.polymars_All          0.4726172 0.1224716
+> 
+> set.seed(987325)
+> npcurve <- agecurveAb(Y=log10(d$ttmb[d$parity=='2:Nulliparous']),Age=d$age[d$parity=='2:Nulliparous'],
++                       W=subset(d,parity=='2:Nulliparous',select=c("region")),
++                       id=d$psuid[d$parity=='2:Nulliparous'],
++                       SL.library=SL.library)
+
+Summary of SuperLearner cross validated risk and 
+weights for algorithms included in the library:
+
+                          CV-Risk       Coef
+SL.mean_All              1.908416 0.03090276
+SL.glm_All               1.754372 0.00000000
+SL.gam.df3_All           1.691976 0.46447777
+SL.loess_All             1.705104 0.25017107
+SL.randomForest.ns25_All 1.765410 0.00000000
+SL.polymars_All          1.700989 0.25444840
+> 
+> 
+> #----------------------------------
+> # estimate overall mean MFI 
+> # by parity and age group
+> #
+> # not used in the mansucript, due to
+> # slight redundancy with the
+> # seroprevalence estimates (below)
+> # (albeit with higher precision on
+> #  on the means here)
+> #----------------------------------
+> # count of obs in strata and crude means
+> Nobs <- tapply(log10(d$ttmb),list(d$agecat,d$parity),function(x) length(x))
+> Nobs
+        1:Parous 2:Nulliparous
+(14,19]       48           387
+(19,24]      224           244
+(24,29]      395            88
+(29,34]      397            52
+(34,39]      292            23
+> mus <- tapply(log10(d$ttmb),list(d$agecat,d$parity),function(x) mean(x,na.rm=T))
+> mus
+        1:Parous 2:Nulliparous
+(14,19] 2.491830      2.715679
+(19,24] 4.104376      3.356975
+(24,29] 4.197195      3.860792
+(29,34] 4.331790      3.638774
+(34,39] 4.186849      3.375758
+> 
+> 
+> # reduced library to just estimate simple means flexibly adjusted for age and region 
+> # w/ correct CIs that account for clustering
+> SL.library <- c("SL.mean","SL.glm","SL.gam")
+> agecats <- levels(d$agecat)
+> set.seed(987325)
+> EYx_p <- sapply(agecats,function (x) tmleAb(Y=log10(d$ttmb[d$parity=='1:Parous' & d$agecat==x]),
++                                             W=subset(d,parity=='1:Parous' & agecat==x,select=c("age","region")),
++                                             id=d$psuid[d$parity=='1:Parous' & d$agecat==x],
++                                             SL.library=SL.library)[c("psi","se","lb","ub")])
+ Population Mean
+   Parameter Estimate:  2.4918
+   Estimated Variance:  0.061621
+              p-value:  <2e-16
+    95% Conf Interval: (2.0053, 2.9784) 
+ Population Mean
+   Parameter Estimate:  4.1044
+   Estimated Variance:  0.0040139
+              p-value:  <2e-16
+    95% Conf Interval: (3.9802, 4.2286) 
+ Population Mean
+   Parameter Estimate:  4.1972
+   Estimated Variance:  0.0015589
+              p-value:  <2e-16
+    95% Conf Interval: (4.1198, 4.2746) 
+ Population Mean
+   Parameter Estimate:  4.3318
+   Estimated Variance:  0.00022649
+              p-value:  <2e-16
+    95% Conf Interval: (4.3023, 4.3613) 
+ Population Mean
+   Parameter Estimate:  4.1868
+   Estimated Variance:  0.0033072
+              p-value:  <2e-16
+    95% Conf Interval: (4.0741, 4.2996) 
+> 
+> set.seed(987325)
+> EYx_n <- sapply(agecats,function (x) tmleAb(Y=log10(d$ttmb[d$parity=='2:Nulliparous' & d$agecat==x]),
++                                                  W=subset(d,parity=='2:Nulliparous' & agecat==x,select=c("age","region")),
++                                                  id=d$psuid[d$parity=='2:Nulliparous' & d$agecat==x],
++                                                  SL.library=SL.library)[c("psi","se","lb","ub")])
+ Population Mean
+   Parameter Estimate:  2.7157
+   Estimated Variance:  0.010135
+              p-value:  <2e-16
+    95% Conf Interval: (2.5184, 2.913) 
+ Population Mean
+   Parameter Estimate:  3.357
+   Estimated Variance:  0.014632
+              p-value:  <2e-16
+    95% Conf Interval: (3.1199, 3.5941) 
+ Population Mean
+   Parameter Estimate:  3.8608
+   Estimated Variance:  0.010798
+              p-value:  <2e-16
+    95% Conf Interval: (3.6571, 4.0645) 
+ Population Mean
+   Parameter Estimate:  3.6388
+   Estimated Variance:  0.034474
+              p-value:  <2e-16
+    95% Conf Interval: (3.2749, 4.0027) 
+ Population Mean
+   Parameter Estimate:  3.3758
+   Estimated Variance:  0.078742
+              p-value:  <2e-16
+    95% Conf Interval: (2.8258, 3.9258) 
+> 
+> set.seed(987325)
+> EYx_diff <- sapply(agecats,function (x) tmleAb(Y=log10(d$ttmb[d$agecat==x]),
++                                                X=d$parous[d$agecat==x],
++                                                W=subset(d,agecat==x,select=c("age","region")),
++                                                id=d$psuid[d$agecat==x],
++                                                SL.library=SL.library)[c("psi","se","lb","ub","p")])
+ Additive Effect
+   Parameter Estimate:  -0.6484
+   Estimated Variance:  0.07568
+              p-value:  0.018426
+    95% Conf Interval: (-1.1876, -0.1092) 
+ Additive Effect
+   Parameter Estimate:  0.676
+   Estimated Variance:  0.015437
+              p-value:  5.3029e-08
+    95% Conf Interval: (0.43248, 0.91952) 
+ Additive Effect
+   Parameter Estimate:  0.32633
+   Estimated Variance:  0.016479
+              p-value:  0.011018
+    95% Conf Interval: (0.074728, 0.57794) 
+ Additive Effect
+   Parameter Estimate:  0.68773
+   Estimated Variance:  0.033131
+              p-value:  0.00015789
+    95% Conf Interval: (0.33097, 1.0445) 
+ Additive Effect
+   Parameter Estimate:  0.88185
+   Estimated Variance:  0.13652
+              p-value:  0.017001
+    95% Conf Interval: (0.15765, 1.606) 
+> 
+> 
+> #----------------------------------
+> # estimate seroprevalence 
+> # by parity and age group
+> #----------------------------------
+> 
+> # count of obs in strata and crude means
+> Nobs <- tapply(log10(d$ttmb),list(d$agecat,d$parity),function(x) length(x))
+> Nobs
+        1:Parous 2:Nulliparous
+(14,19]       48           387
+(19,24]      224           244
+(24,29]      395            88
+(29,34]      397            52
+(34,39]      292            23
+> prevs <- tapply(log10(d$ttpos),list(d$agecat,d$parity),function(x) mean(x,na.rm=T))
+> prevs
+        1:Parous 2:Nulliparous
+(14,19]     -Inf          -Inf
+(19,24]     -Inf          -Inf
+(24,29]     -Inf          -Inf
+(29,34]     -Inf          -Inf
+(34,39]     -Inf          -Inf
+> 
+> 
+> # reduced library to just estimate simple means flexibly adjusted for age and region 
+> # w/ correct CIs that account for clustering
+> SL.library <- c("SL.mean","SL.glm","SL.gam")
+> agecats <- levels(d$agecat)
+> set.seed(987325)
+> EYxp_p <- sapply(agecats,function (x) tmleAb(Y=d$ttpos[d$parity=='1:Parous' & d$agecat==x],
++                                             W=subset(d,parity=='1:Parous' & agecat==x,select=c("age","region")),
++                                             id=d$psuid[d$parity=='1:Parous' & d$agecat==x],
++                                             SL.library=SL.library)[c("psi","se","lb","ub")])
+ Population Mean
+   Parameter Estimate:  0.5625
+   Estimated Variance:  0.0070565
+              p-value:  2.1389e-11
+    95% Conf Interval: (0.39785, 0.72715) 
+ Population Mean
+   Parameter Estimate:  0.95536
+   Estimated Variance:  0.00034452
+              p-value:  <2e-16
+    95% Conf Interval: (0.91898, 0.99174) 
+ Population Mean
+   Parameter Estimate:  0.96709
+   Estimated Variance:  8.2734e-05
+              p-value:  <2e-16
+    95% Conf Interval: (0.94926, 0.98492) 
+ Population Mean
+   Parameter Estimate:  0.99496
+   Estimated Variance:  6.2286e-06
+              p-value:  <2e-16
+    95% Conf Interval: (0.99007, 0.99985) 
+ Population Mean
+   Parameter Estimate:  0.96575
+   Estimated Variance:  0.00023361
+              p-value:  <2e-16
+    95% Conf Interval: (0.9358, 0.99571) 
+> 
+> set.seed(987325)
+> EYxp_n <- sapply(agecats,function (x) tmleAb(Y=d$ttpos[d$parity=='2:Nulliparous' & d$agecat==x],
++                                             W=subset(d,parity=='2:Nulliparous' & agecat==x,select=c("age","region")),
++                                             id=d$psuid[d$parity=='2:Nulliparous' & d$agecat==x],
++                                             SL.library=SL.library)[c("psi","se","lb","ub")])
+ Population Mean
+   Parameter Estimate:  0.6124
+   Estimated Variance:  0.00119
+              p-value:  <2e-16
+    95% Conf Interval: (0.54479, 0.68002) 
+ Population Mean
+   Parameter Estimate:  0.76639
+   Estimated Variance:  0.0013742
+              p-value:  <2e-16
+    95% Conf Interval: (0.69374, 0.83905) 
+ Population Mean
+   Parameter Estimate:  0.88636
+   Estimated Variance:  0.0010415
+              p-value:  <2e-16
+    95% Conf Interval: (0.82311, 0.94962) 
+ Population Mean
+   Parameter Estimate:  0.86538
+   Estimated Variance:  0.0027472
+              p-value:  <2e-16
+    95% Conf Interval: (0.76265, 0.96812) 
+ Population Mean
+   Parameter Estimate:  0.78261
+   Estimated Variance:  0.0085197
+              p-value:  <2e-16
+    95% Conf Interval: (0.6017, 0.96352) 
+> 
+> set.seed(987325)
+> EYxp_diff <- sapply(agecats,function (x) tmleAb(Y=d$ttpos[d$agecat==x],
++                                                X=d$parous[d$agecat==x],
++                                                W=subset(d,agecat==x,select=c("age","region")),
++                                                id=d$psuid[d$agecat==x],
++                                                SL.library=SL.library)[c("psi","se","lb","ub","p")])
+ Additive Effect
+   Parameter Estimate:  -0.1638
+   Estimated Variance:  0.0092456
+              p-value:  0.088478
+    95% Conf Interval: (-0.35226, 0.024665) 
+ Additive Effect
+   Parameter Estimate:  0.17512
+   Estimated Variance:  0.0014482
+              p-value:  4.1884e-06
+    95% Conf Interval: (0.10054, 0.24971) 
+ Additive Effect
+   Parameter Estimate:  0.080707
+   Estimated Variance:  0.0015349
+              p-value:  0.039399
+    95% Conf Interval: (0.0039175, 0.1575) 
+ Additive Effect
+   Parameter Estimate:  0.12332
+   Estimated Variance:  0.0014446
+              p-value:  0.0011762
+    95% Conf Interval: (0.048825, 0.19782) 
+ Additive Effect
+   Parameter Estimate:  0.19522
+   Estimated Variance:  0.013968
+              p-value:  0.098579
+    95% Conf Interval: (-0.036427, 0.42686) 
+> 
+> 
+> #----------------------------------
+> # Create a figure of results
+> #----------------------------------
+> 
+> # bright color blind palette:  https://personal.sron.nl/~pault/ 
+> cblack <- "#000004FF"
+> cblue <- "#3366AA"
+> cteal <- "#11AA99"
+> cgreen <- "#66AA55"
+> cchartr <- "#CCCC55"
+> cmagent <- "#992288"
+> cred <- "#EE3333"
+> corange <- "#EEA722"
+> cyellow <- "#FFEE33"
+> cgrey <- "#777777"
+> 
+> 
+> pdf("~/dropbox/cambodia/results/figs/cambodia-tetanus-parity-quant-seroprev.pdf",width=9,height=4)
+> lo <- layout(mat=matrix(1:2,nrow=1,ncol=2),widths=c(1,1))
+> 
+> cols=c(cblue,cgreen)
+> 
+> 
+> ## Age dependent mean response
+> # jitter the ages just a little to improve visualization
+> ytics <- 0:5
+> xtics <- seq(15,40,by=5)
+> op <-par(mar=c(4,4,2,4)+0.1,xpd=T)
+> plot(1,1,type="n",yaxt="n",xaxt="n",bty="n",ylim=c(0,5),xlim=range(xtics),xlab="",ylab="")
+> axis(2,at=ytics,labels=c(
++   expression(10^0),
++   expression(10^1),
++   expression(10^2),
++   expression(10^3),
++   expression(10^4),
++   expression(10^5)), las=1,cex.axis=1.25)
+> axis(1,at=xtics,las=1,cex.axis=1.25)
+> mtext("Age (years)",side=1,line=2.5,las=1)
+> mtext("Luminex response (MFI-bg)",side=2,line=3)
+> mtext("Tetanus age-dependent mean response",side=3,line=0,adj=0)
+> 
+> # parous
+> points(jitter(pacurve$Age),pacurve$Y,pch=16,cex=0.5,col=alpha(cols[1],alpha=0.3))
+> lines(pacurve$Age,pacurve$pY,col=cols[1])
+> 
+> # nulliparous
+> points(jitter(npcurve$Age),npcurve$Y,pch=16,cex=0.5,col=alpha(cols[2],alpha=0.3))
+> lines(npcurve$Age,npcurve$pY,col=cols[2])
+> 
+> # group labels
+> text(40,pacurve$pY[length(pacurve$pY)],"Parous", col=cols[1],cex=1,adj=0)
+> text(40,npcurve$pY[length(npcurve$pY)],"Nulliparous", col=cols[2],cex=1,adj=0)
+> 
+> 
+> ## Seroprotection by age category
+> ytics <- seq(0,1,by=0.2)
+> op <-par(mar=c(4,4,2,1)+0.1)
+> xc <- 1:5
+> x1s <- xc-0.1
+> x2s <- xc+0.1
+> plot(xc,xc,type="n",yaxt="n",xaxt="n",bty="n",ylim=c(0,1),xlim=c(0.5,5.5),xlab="",ylab="")
+> axis(2,at=ytics,labels=sprintf("%1.0f",ytics*100),las=1)
+> mtext(c("15-19","20-24","25-29","30-34","35-39"),at=xc,side=1,line=1,las=1,cex=1.1)
+> mtext("Age category (years)",side=1,line=2.5,las=1)
+> mtext("Seroprotected (%)",side=2,line=2.5)
+> mtext("Tetanus seroprotected (%)",side=3,line=0,adj=0)
+> 
+> arrows(x0=x1s,y0=unlist(EYxp_p[3,]),y1=unlist(EYxp_p[4,]),angle=90,length=0.05,code=3,col=cols[1])
+> points(x1s,unlist(EYxp_p[1,]),pch=19,bg="white",col=cols[1])
+> 
+> arrows(x0=x2s,y0=unlist(EYxp_n[3,]),y1=unlist(EYxp_n[4,]),angle=90,length=0.05,code=3,col=cols[2])
+> 
+> points(x2s,unlist(EYxp_n[1,]),pch=21,bg="white",col=cols[2])
+> 
+> 
+> # group labels
+> text(x=x1s[2],y=unlist(EYxp_p[1,2]),"Parous", col=cols[1],cex=1,pos=2,adj=1)
+> text(x=x2s[1],y=unlist(EYxp_n[1,1]),"Nulliparous",col=cols[2],cex=1,pos=4,adj=0)
+> 
+> 
+> par(op)
+> lo <- layout(mat=matrix(1))
+> dev.off()
+null device 
+          1 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> proc.time()
+   user  system elapsed 
+125.490   1.645 134.441 

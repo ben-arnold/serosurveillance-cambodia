@@ -1,0 +1,214 @@
+
+R version 3.3.2 (2016-10-31) -- "Sincere Pumpkin Patch"
+Copyright (C) 2016 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin13.4.0 (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+[Previously saved workspace restored]
+
+> 
+> 
+> #----------------------------------
+> # cambodia-heatmap.R
+> #
+> # heatmap of individual level
+> # antibody response
+> #----------------------------------
+> 
+> #----------------------------------
+> # input files:
+> #   cambodia_serology_public.rds
+> #
+> # output files:
+> #   cambodia-Ab-heatmap.pdf
+> #----------------------------------
+> 
+> #----------------------------------
+> # preamble
+> #----------------------------------
+> 
+> rm(list=ls())
+> library(dplyr)
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+> library(RColorBrewer)
+> 
+> #----------------------------------
+> # load the dataset
+> #----------------------------------
+> d <- readRDS("~/dropbox/cambodia/data/final/cambodia_serology_public.rds")
+> 
+> #----------------------------------
+> # subset data
+> #----------------------------------
+> mbavars <- c("ttmb","sag2a","nie","t24","wb123","bm14","bm33","pvmsp19","pfmsp19")
+> # ,"pfp1","pfp2"
+> 
+> d <- subset(d,select=c("region","psuid","age",mbavars)) %>%
++   arrange(region)
+> 
+> #----------------------------------
+> # count and recode values <=0 to 1
+> #----------------------------------
+> apply(d[mbavars],2,function(x) table(x<=0) )
+$ttmb
+
+FALSE  TRUE 
+ 2146     4 
+
+$sag2a
+
+FALSE  TRUE 
+ 2107    43 
+
+$nie
+
+FALSE 
+ 2150 
+
+$t24
+
+FALSE 
+ 2150 
+
+$wb123
+
+FALSE 
+ 2150 
+
+$bm14
+
+FALSE  TRUE 
+ 2144     6 
+
+$bm33
+
+FALSE  TRUE 
+ 2137    13 
+
+$pvmsp19
+
+FALSE  TRUE 
+ 2145     5 
+
+$pfmsp19
+
+FALSE  TRUE 
+ 2148     2 
+
+> for(vv in mbavars) {
++   d[vv][d[vv]<=0]<-1
++ }
+> #----------------------------------
+> # convert values to log10 scale
+> #----------------------------------
+> for(vv in mbavars) {
++   d[vv] <- log10(d[vv])
++ }
+> 
+> 
+> #----------------------------------
+> # scale all of the Ab measures 
+> # for visualization
+> #----------------------------------
+> 
+> # dscaled <- apply(d[rev(mbavars)],2,function(x) scale(x))
+> # 
+> # boundY <- function(x) {
+> #   minx <- min(x)
+> #   maxx <- max(x)
+> #   return( (x-minx)/(maxx-minx))
+> # }
+> # dscaled <- apply(d[rev(mbavars)],2,function(x) boundY(x))
+> 
+> # decided against scaling response after discussion with 
+> # co-authors.  Just go with the actual MFI-bg units
+> dscaled <- as.matrix(d[rev(mbavars)])
+> 
+> #----------------------------------
+> # make an individual level heatmap
+> #----------------------------------
+> 
+> # sort data by region
+> # and by mean antibody response
+> dscaled <- dscaled[order(d$region,rowMeans(dscaled)),]
+> 
+> # get min/max/mean rows for regions
+> rmins <- tapply(1:nrow(d),d$region,min)
+> rmaxs <- tapply(1:nrow(d),d$region,max)
+> rmus  <- rowMeans(cbind(rmins,rmaxs))
+> rnames <- c("Phnom Penh","Southeast","Southwest","West","North")
+> 
+> Abnames <- c(
++   "Tetanus toxiod",
++   expression(paste(italic('Toxoplasma gondii '),"SAG2A")),
++   expression(paste(italic('Strongyloides stercoralis '),"NIE")),
++   expression(paste(italic('Taenia solium '),"T24H")),
++   expression(paste("Lymphatic filariasis Wb123")),
++   expression(paste("Lymphatic filariasis Bm14")),
++   expression(paste("Lymphatic filariasis Bm33")),
++   expression(paste(italic('Plasmodium vivax'),' ',MSP1[19])),
++   expression(paste(italic('Plasmodium falciparum'),' ',MSP1[19]))
++ )
+> 
+> 
+> pdf("~/dropbox/cambodia/results/figs/cambodia-Ab-heatmap.pdf",width=7,height=2)
+> lo <- layout(mat=matrix(c(1,1,1,3,2,4),byrow=T,nrow=2,ncol=3),heights=c(1,0.2),widths=c(0.45,0.4,0.21))
+> cols <- colorRampPalette(brewer.pal(9, "BuGn"))(100)
+> 
+> op <- par(mar=c(1,1,2,9.5)+0.1)
+> nx <- nrow(dscaled)
+> ny <- ncol(dscaled)
+> image(x=1:nx,y=1:ny,
++       z=dscaled,
++       col=cols,
++       xlab="",xaxt="n",ylab="",yaxt="n",
++       )
+> axis(4,at=1:ny,labels=rev(Abnames),las=1,tick=FALSE,lty=0,line=-0.5,cex.axis=0.7)
+> axis(3,at=c(rmins,rmaxs),labels=FALSE,line=0.1)
+> 
+> mtext(rnames,side=3,line=0.15,at=rmus,cex=0.6)
+> mtext("Region",side=3,line=1,at=rmus[3],cex=0.8)
+> mtext("Individuals are sorted by region and then by mean reponse",side=1,line=0.75,adj=0,cex=0.6)
+> 
+> op <- par(mar=c(2,0,0,0)+0.1)
+> image(x=1:100,y=1,z=matrix(1:100,nrow=100,ncol=1),col=cols,
++       xlab="",xaxt="n",ylab="",yaxt="n"
++       )
+> mtext(expression(10^0),side=1,at=1,line=0.5,las=1,cex=0.75)
+> mtext(expression(10^4.5),side=1,at=100,line=0.5,las=1,cex=0.75)
+> mtext("Luminex response (MFI-bg)",side=1,line=0.5,cex=0.6)
+> 
+> par(op)
+> lo <- layout(mat=matrix(1))
+> dev.off()
+null device 
+          1 
+> 
+> 
+> 
+> proc.time()
+   user  system elapsed 
+  1.495   0.146   5.799 

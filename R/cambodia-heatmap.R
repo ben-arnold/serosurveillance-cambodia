@@ -21,6 +21,8 @@
 
 rm(list=ls())
 library(dplyr)
+library(tidyr)
+library(ggplot2)
 library(RColorBrewer)
 
 #----------------------------------
@@ -29,13 +31,10 @@ library(RColorBrewer)
 d <- readRDS("~/dropbox/cambodia/data/final/cambodia_serology_public.rds")
 
 #----------------------------------
-# subset data
+# subset data to antibodies
 #----------------------------------
 mbavars <- c("ttmb","sag2a","nie","t24","wb123","bm14","bm33","pvmsp19","pfmsp19")
-# ,"pfp1","pfp2"
-
-d <- subset(d,select=c("region","psuid","age",mbavars)) %>%
-  arrange(region)
+d <- subset(d,select=c("region","psuid",mbavars)) 
 
 #----------------------------------
 # count and recode values <=0 to 1
@@ -51,81 +50,115 @@ for(vv in mbavars) {
   d[vv] <- log10(d[vv])
 }
 
+#----------------------------------
+# calculate mean antibody response
+# (used for sorting indivs in heatmap)
+#----------------------------------
+d$abmean <- rowMeans(d[mbavars])
+d <- group_by(d,region) %>%
+  arrange(region,abmean) %>%
+  mutate(indivrank = 1:n())
 
 #----------------------------------
-# scale all of the Ab measures 
-# for visualization
+# gather data into long format
+# for plotting, and sort by 
 #----------------------------------
-
-# dscaled <- apply(d[rev(mbavars)],2,function(x) scale(x))
-# 
-# boundY <- function(x) {
-#   minx <- min(x)
-#   maxx <- max(x)
-#   return( (x-minx)/(maxx-minx))
-# }
-# dscaled <- apply(d[rev(mbavars)],2,function(x) boundY(x))
-
-# decided against scaling response after discussion with 
-# co-authors.  Just go with the actual MFI-bg units
-dscaled <- as.matrix(d[rev(mbavars)])
+dlong <- gather(d,antigen,mfi,-region,-psuid,-abmean,-indivrank)  %>%
+  arrange(region,indivrank)
 
 #----------------------------------
-# make an individual level heatmap
+# format factors for plotting
+#----------------------------------
+levels(dlong$region) <- c("Phnom Penh","Southeast","Southwest","West","North")
+
+
+Abnames <- c("Tetanus toxiod",
+             "Toxoplasma gondii SAG2A",
+             "Strongyloides stercoralis NIE",
+             "Taenia solium T24H",
+             "Lymphatic filariasis Wb123",
+             "Lymphatic filariasis Bm14",
+             "Lymphatic filariasis Bm33",
+             "Plasmodium vivax MSP-1(19)",
+             "Plasmodium falciparum MSP1(19)")
+
+dlong$ab <- factor(dlong$antigen,levels=rev(mbavars),labels=rev(Abnames))
+
+dlong$abgroup <- factor(NA,levels=c("VPDs","NTDs","Malaria"))
+dlong$abgroup[dlong$antigen %in% c("ttmb")] <-"VPDs"
+dlong$abgroup[dlong$antigen %in% c("sag2a","nie","t24","wb123","bm14","bm33")] <-"NTDs"
+dlong$abgroup[dlong$antigen %in% c("pvmsp19","pfmsp19")] <-"Malaria"
+
+#----------------------------------
+# make a heatmap of all antigens
+# inspiration: http://www.roymfrancis.com/a-guide-to-elegant-tiled-heatmaps-in-r/
 #----------------------------------
 
-# sort data by region
-# and by mean antibody response
-dscaled <- dscaled[order(d$region,rowMeans(dscaled)),]
+#define a colour for fonts
+textcol <- "grey20"
 
-# get min/max/mean rows for regions
-rmins <- tapply(1:nrow(d),d$region,min)
-rmaxs <- tapply(1:nrow(d),d$region,max)
-rmus  <- rowMeans(cbind(rmins,rmaxs))
-rnames <- c("Phnom Penh","Southeast","Southwest","West","North")
+p <- ggplot(dlong,aes(x=indivrank,y=ab,fill=mfi)) +
+  #facet over village
+  facet_grid(abgroup~region,scales='free',space='free',switch="y")+
+  
+  #add border white colour of line thickness 0.25
+  # geom_tile(colour="white",size=0.25)+
+  geom_tile() +
+  #remove y axis labels, 
+  labs(x="Individuals are sorted by mean antibody response within region",y="",title="")+
+  #remove extra space
+  scale_y_discrete(expand=c(0,0),position="right")+
+  scale_x_continuous(expand=c(0,0))+
+  # scale_x_discrete(expand=c(0,0),
+  #                  breaks=1:9,labels=1:9)+
+  #change the scale_fill_manual
+  scale_fill_distiller(palette="BuGn",na.value="grey90",
+                       direction=0,
+                       guide=guide_colorbar(title="log10\nMFI-bg",face='bold'))+
+  # scale_fill_manual(values=rev(brewer.pal(7,"YlGnBu")),na.value="grey90",guide=guide_colorbar(title="log10\nMFI-bg",face='bold'))+
+  #one unit on x-axis is equal to one unit on y-axis.
+  #equal aspect ratio x and y axis
+  coord_equal()+
+  #set base size for all font elements
+  theme_grey(base_size=10)+
+  #theme options
+  theme(
+    
+    legend.title=element_text(color=textcol,size=8),
+    legend.position = "left",
+    #reduce/remove legend margin
+    legend.margin = margin(grid::unit(0.1,"cm")),
+    #change legend text properties
+    legend.text=element_text(colour=textcol,size=7,face="bold"),
+    #change legend key height
+    legend.key.height=grid::unit(0.8,"cm"),
+    #set a slim legend
+    legend.key.width=grid::unit(0.4,"cm"),
+    
+    #set remove x axis ticks
+    axis.title.x=element_text(hjust=0),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    #set y axis text colour and adjust vertical justification
+    axis.text.y=element_text(size=10,vjust = 0.2,colour=textcol),
+    #change axis ticks thickness
+    axis.ticks=element_line(size=0.4),
+    
+    #change title font, size, colour and justification
+    plot.title=element_text(colour=textcol,hjust=0,size=12,face="bold"),
+    #adjust facet labels
+    strip.text.x = element_text(size=10),
+    strip.text.y = element_text(size=8),
+    #remove plot background
+    plot.background=element_blank(),
+    #remove plot border
+    panel.border=element_blank(),
+    #remove plot margins
+    # plot.margin=margin(grid::unit(1,"cm"))
+  )
 
-Abnames <- c(
-  "Tetanus toxiod",
-  expression(paste(italic('Toxoplasma gondii '),"SAG2A")),
-  expression(paste(italic('Strongyloides stercoralis '),"NIE")),
-  expression(paste(italic('Taenia solium '),"T24H")),
-  expression(paste("Lymphatic filariasis Wb123")),
-  expression(paste("Lymphatic filariasis Bm14")),
-  expression(paste("Lymphatic filariasis Bm33")),
-  expression(paste(italic('Plasmodium vivax'),' ',MSP1[19])),
-  expression(paste(italic('Plasmodium falciparum'),' ',MSP1[19]))
-)
+#p
 
-
-pdf("~/dropbox/cambodia/results/figs/cambodia-Ab-heatmap.pdf",width=7,height=2)
-lo <- layout(mat=matrix(c(1,1,1,3,2,4),byrow=T,nrow=2,ncol=3),heights=c(1,0.2),widths=c(0.45,0.4,0.21))
-cols <- colorRampPalette(brewer.pal(9, "BuGn"))(100)
-
-op <- par(mar=c(1,1,2,9.5)+0.1)
-nx <- nrow(dscaled)
-ny <- ncol(dscaled)
-image(x=1:nx,y=1:ny,
-      z=dscaled,
-      col=cols,
-      xlab="",xaxt="n",ylab="",yaxt="n",
-      )
-axis(4,at=1:ny,labels=rev(Abnames),las=1,tick=FALSE,lty=0,line=-0.5,cex.axis=0.7)
-axis(3,at=c(rmins,rmaxs),labels=FALSE,line=0.1)
-
-mtext(rnames,side=3,line=0.15,at=rmus,cex=0.6)
-mtext("Region",side=3,line=1,at=rmus[3],cex=0.8)
-mtext("Individuals are sorted by region and then by mean reponse",side=1,line=0.75,adj=0,cex=0.6)
-
-op <- par(mar=c(2,0,0,0)+0.1)
-image(x=1:100,y=1,z=matrix(1:100,nrow=100,ncol=1),col=cols,
-      xlab="",xaxt="n",ylab="",yaxt="n"
-      )
-mtext(expression(10^0),side=1,at=1,line=0.5,las=1,cex=0.75)
-mtext(expression(10^4.5),side=1,at=100,line=0.5,las=1,cex=0.75)
-mtext("Luminex response (MFI-bg)",side=1,line=0.5,cex=0.6)
-
-par(op)
-lo <- layout(mat=matrix(1))
-dev.off()
+ggsave(filename="~/dropbox/cambodia/results/figs/cambodia-Ab-heatmap.pdf",plot = p,device='pdf',width=13,height=4)
 
 

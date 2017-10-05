@@ -3,7 +3,7 @@
 #----------------------------------
 # cambodia-heatmap.R
 #
-# heatmap of individual level
+# heatmap of cluster level
 # antibody response
 #----------------------------------
 
@@ -12,7 +12,7 @@
 #   cambodia_serology_public.rds
 #
 # output files:
-#   cambodia-Ab-heatmap.pdf
+#   cambodia-Ab-heatmap-clusters.pdf
 #----------------------------------
 
 #----------------------------------
@@ -51,10 +51,19 @@ for(vv in mbavars) {
 }
 
 #----------------------------------
+# group data by region and cluster 
+# estimate means
+#----------------------------------
+d <- group_by(d,region,psuid)
+d <- summarize_all(d,mean)
+
+#----------------------------------
 # calculate mean antibody response
 # (used for sorting indivs in heatmap)
+# exclude tetanus since scale for
+# tetanus is reversed (want high mfi)
 #----------------------------------
-d$abmean <- rowMeans(d[mbavars])
+d$abmean <- rowMeans(d[mbavars[!(mbavars %in% "ttmb")]])
 d <- group_by(d,region) %>%
   arrange(region,abmean) %>%
   mutate(indivrank = 1:n())
@@ -84,10 +93,11 @@ Abnames <- c("Tetanus toxiod",
 
 dlong$ab <- factor(dlong$antigen,levels=rev(mbavars),labels=rev(Abnames))
 
-dlong$abgroup <- factor(NA,levels=c("VPDs","NTDs","Malaria"))
+dlong$abgroup <- factor(NA,levels=c("VPDs","Malaria","NTDs"))
 dlong$abgroup[dlong$antigen %in% c("ttmb")] <-"VPDs"
-dlong$abgroup[dlong$antigen %in% c("sag2a","nie","t24","wb123","bm14","bm33")] <-"NTDs"
 dlong$abgroup[dlong$antigen %in% c("pvmsp19","pfmsp19")] <-"Malaria"
+dlong$abgroup[dlong$antigen %in% c("sag2a","nie","t24","wb123","bm14","bm33")] <-"NTDs"
+
 
 #----------------------------------
 # make a heatmap of all antigens
@@ -102,17 +112,16 @@ p <- ggplot(dlong,aes(x=indivrank,y=ab,fill=mfi)) +
   facet_grid(abgroup~region,scales='free',space='free',switch="y")+
   
   #add border white colour of line thickness 0.25
-  # geom_tile(colour="white",size=0.25)+
-  geom_tile() +
+  geom_tile(colour="white",size=0.25)+
   #remove y axis labels, 
-  labs(x="Individuals are sorted by mean antibody response within region",y="",title="")+
+  labs(x="Clusters are stratified by region then sorted by mean antibody response",y="",title="")+
   #remove extra space
   scale_y_discrete(expand=c(0,0),position="right")+
   scale_x_continuous(expand=c(0,0))+
   # scale_x_discrete(expand=c(0,0),
   #                  breaks=1:9,labels=1:9)+
   #change the scale_fill_manual
-  scale_fill_distiller(palette="BuGn",na.value="grey90",
+  scale_fill_distiller(palette="YlGnBu",na.value="grey90",
                        direction=0,
                        guide=guide_colorbar(title="log10\nMFI-bg",face='bold'))+
   # scale_fill_manual(values=rev(brewer.pal(7,"YlGnBu")),na.value="grey90",guide=guide_colorbar(title="log10\nMFI-bg",face='bold'))+
@@ -159,6 +168,6 @@ p <- ggplot(dlong,aes(x=indivrank,y=ab,fill=mfi)) +
 
 #p
 
-ggsave(filename="~/dropbox/cambodia/results/figs/cambodia-Ab-heatmap.pdf",plot = p,device='pdf',width=13,height=4)
+ggsave(filename="~/dropbox/cambodia/results/figs/cambodia-Ab-heatmap-clusters.pdf",plot = p,device='pdf',width=13,height=4)
 
 

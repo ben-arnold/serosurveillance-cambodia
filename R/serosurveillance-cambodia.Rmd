@@ -1,0 +1,610 @@
+---
+title: "Integrated serologic surveillance of population immunity and disease transmission"
+author: "Computational notebook"
+date: "April 20, 2018"
+output: 
+  html_notebook:
+    theme: default
+    highlight: haddock
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Summary
+This notebook conducts the analyses and creates the figures for the Perspective:
+
+Arnold BF, Scobie HM, Priest JW, Lammie PJ. Integrated serologic surveillance of population immunity and disease transmission. _Emerging Infectious Diseases_ 2018; https://doi.org/10.3201/eid2407.171928
+
+
+To download the R markdown source code for this notebook, toggle the dropdown menu at the top right of this page to "Download Rmd".
+
+## Preamble
+```{r preamble, eval=TRUE,echo=TRUE,results='hide'}
+# Preamble - load packages and save colors for plotting
+rm(list=ls())
+# Machine learning and TMLE packages
+library(SuperLearner)
+library(tmle)
+# this is a development package on GitHub: https://github.com/ben-arnold/tmleAb
+library(tmleAb) 
+
+library(foreach)
+# dm and data visualization
+library(tidyverse)
+library(scales)
+library(ellipse)
+library(RColorBrewer)
+
+# bright color blind palette:  https://personal.sron.nl/~pault/ 
+cblack <- "#000004FF"
+cblue <- "#3366AA"
+cteal <- "#11AA99"
+cgreen <- "#66AA55"
+cchartr <- "#CCCC55"
+cmagent <- "#992288"
+cred <- "#EE3333"
+corange <- "#EEA722"
+cyellow <- "#FFEE33"
+cgrey <- "#777777"
+```
+
+
+
+# Load and process data
+
+These data are publicly available through the Open Science Framework:
+https://osf.io/2kr8b/
+
+To run this notebook, create a /data/ subdirectory and save the .rds file there.  The OSF repository includes a codebook that describes the contents of the dataset.
+
+For additional background on the serosurvey and study that collected these antibody measurements, please see:
+
+Mao B, Chheng K, et al. Immunity to polio, measles and rubella in women of child-bearing age and estimated congenital rubella syndrome incidence, Cambodia, 2012. _Epidemiol Infect._ 2015;143: 1858–1867. https://www.ncbi.nlm.nih.gov/pubmed/25373419
+
+Scobie HM, Mao B,  et al. Tetanus Immunity among Women Aged 15 to 39 Years in Cambodia: a National Population-Based Serosurvey, 2012. _Clin Vaccine Immunol._ 2016;23: 546–554. https://www.ncbi.nlm.nih.gov/pubmed/27053629
+
+Priest JW, Jenks MH, et al. Integration of Multiplex Bead Assays for Parasitic Diseases into a National, Population-Based Serosurvey of Women 15-39 Years of Age in Cambodia. _PLoS Negl Trop Dis._ 2016;10: e0004699. https://www.ncbi.nlm.nih.gov/pubmed/27136913
+
+```{r load data}
+#----------------------------------
+# load the dataset
+#----------------------------------
+d <- readRDS("~/serosurveillance-cambodia/data/cambodia_serology_public.rds")
+
+
+# recode 4 observations with negative
+# values to 1
+table(d$ttmb<=0)
+d$ttmb[d$ttmb<=0] <- 1
+
+# create an indicator of positive based on
+# the multiplex bead assay. This cutoff of 100 MFI
+# was established in: 
+# Scobie HM, Mao B, et al. Clin Vaccine Immunol. 2016;23:546–54. 
+# PubMed http://dx.doi.org/10.1128/CVI.00052-16
+d$ttpos <- ifelse(d$ttmb>100,1,0)
+
+# create an indicator for parous vs nulliparus
+d$parous <- ifelse(d$parity=='1:Parous',1,0)
+
+# create an age category variable
+d$agecat <- cut(d$age,breaks=c(14,19,24,29,34,39))
+
+
+```
+
+# Tetanus analysis
+
+This analysis examines antibody levels to tetanus toxin by age and parity. It also summarizes the proportion of women by age group who are classified as seroprotected (MFI>100).
+
+## Age-dependent mean curves
+Estimate the age-dependent mean tetanus response by parity using a flexible, ensemble approach. The methodology is described in more detail in:
+
+Arnold BF, et al. _PLoS Negl Trop Dis._ 2017;11:e0005616. PubMed: http://dx.doi.org/10.1371/journal.pntd.0005616
+
+In this analysis, we use an ensemble machine learning approach to estimate the mean by age. The ensemble includes the simple mean, generalized linear models, smoothing splines within a generalized additive model, locally weighted regression (LOESS), random forest, and polynomial adaptive regression splines.  Fit age-dependent means separately for parous and nulliparous women.
+
+```{r tetanus means}
+#----------------------------------
+# estimate the quantiative
+# age-dependent antibody
+# curve for tetanus toxiod, 
+# stratified by parity
+#----------------------------------
+
+SL.library <- c("SL.mean","SL.glm","SL.gam","SL.loess","SL.randomForest","SL.polymars")
+set.seed(987325)
+pacurve <- agecurveAb(Y=log10(d$ttmb[d$parity=='1:Parous']),Age=d$age[d$parity=='1:Parous'],
+                      W=subset(d,parity=='1:Parous',select=c("region")),
+                      id=d$psuid[d$parity=='1:Parous'],
+                      SL.library=SL.library)
+
+set.seed(987325)
+npcurve <- agecurveAb(Y=log10(d$ttmb[d$parity=='2:Nulliparous']),Age=d$age[d$parity=='2:Nulliparous'],
+                      W=subset(d,parity=='2:Nulliparous',select=c("region")),
+                      id=d$psuid[d$parity=='2:Nulliparous'],
+                      SL.library=SL.library)
+```
+
+The coefficient weights in the library show that the predictions are based mainly on splines, loess, and MARS, which had the lowest cross-validate mean squared error ("risk") in this particular analysis.
+
+
+## Age-stratified seroprevalence by parity.
+
+Below, we transform quantitative antibody levels to seropositive indicators using a cutoff >100 MFI, established in:
+
+Scobie HM, Mao B, et al._Clin Vaccine Immunol._ 2016;23:546–54. 
+PubMed http://dx.doi.org/10.1128/CVI.00052-16
+
+We use targeted maximum likelihood estimation with influence-curve based standard errors that are clustered on the 100 sampling units in the survey (`id=psuid`).  The means are flexibly adjusted for age and region using an ensemble with generalized linear models and splines in a generalized additive model.  We could use a more extensive library in the ensemble, but since the adjustment covariates are not high dimensional there is little gained from a larger library. 
+
+```{r tetanus seroprev}
+#----------------------------------
+# estimate seroprevalence 
+# by parity and age group
+#----------------------------------
+
+# count of obs in strata and crude means
+Nobs <- tapply(d$ttpos,list(d$agecat,d$parity),function(x) length(x))
+Nobs
+prevs <- tapply(d$ttpos,list(d$agecat,d$parity),function(x) mean(x,na.rm=T))
+prevs
+
+
+# reduced library to just estimate simple means flexibly adjusted for age and region 
+# w/ correct CIs that account for clustering
+SL.library <- c("SL.mean","SL.glm","SL.gam")
+agecats <- levels(d$agecat)
+set.seed(987325)
+EYxp_p <- sapply(agecats,function (x) tmleAb(Y=d$ttpos[d$parity=='1:Parous' & d$agecat==x],
+                                            W=subset(d,parity=='1:Parous' & agecat==x,select=c("age","region")),
+                                            id=d$psuid[d$parity=='1:Parous' & d$agecat==x],
+                                            SL.library=SL.library)[c("psi","se","lb","ub")])
+
+set.seed(987325)
+EYxp_n <- sapply(agecats,function (x) tmleAb(Y=d$ttpos[d$parity=='2:Nulliparous' & d$agecat==x],
+                                            W=subset(d,parity=='2:Nulliparous' & agecat==x,select=c("age","region")),
+                                            id=d$psuid[d$parity=='2:Nulliparous' & d$agecat==x],
+                                            SL.library=SL.library)[c("psi","se","lb","ub")])
+
+set.seed(987325)
+EYxp_diff <- sapply(agecats,function (x) tmleAb(Y=d$ttpos[d$agecat==x],
+                                               X=d$parous[d$agecat==x],
+                                               W=subset(d,agecat==x,select=c("age","region")),
+                                               id=d$psuid[d$agecat==x],
+                                               SL.library=SL.library)[c("psi","se","lb","ub","p")])
+```
+
+## Figure of results
+
+This is Figure 1 in the manuscript, created in base R graphics. The left panel includes the raw data plus age-dependent means, stratified by parity. The right panel includes age- and parity- stratified mean seroprevalence, with 95% confidence intervals.   There is a hidden code chunk that saves a PDF version (download the .Rmd file from the top of this notebook for the full source code).
+
+```{r tetanus figure, collapse=TRUE}
+lo <- layout(mat=matrix(1:2,nrow=1,ncol=2),widths=c(1,1))
+
+cols=c(cblue,cgreen)
+
+
+## Age dependent mean response
+# jitter the ages just a little to improve visualization
+ytics <- 0:5
+xtics <- seq(15,40,by=5)
+op <-par(mar=c(4,4,2,4)+0.1,xpd=T)
+plot(1,1,type="n",yaxt="n",xaxt="n",bty="n",ylim=c(0,5),xlim=range(xtics),xlab="",ylab="")
+axis(2,at=ytics,labels=c(
+  expression(10^0),
+  expression(10^1),
+  expression(10^2),
+  expression(10^3),
+  expression(10^4),
+  expression(10^5)), las=1,cex.axis=1.25)
+axis(1,at=xtics,las=1,cex.axis=1.25)
+mtext("Age (years)",side=1,line=2.5,las=1)
+mtext("Luminex response (MFI-bg)",side=2,line=3)
+mtext("Tetanus age-dependent mean response",side=3,line=0,adj=0)
+
+# parous
+points(jitter(pacurve$Age),pacurve$Y,pch=16,cex=0.5,col=alpha(cols[1],alpha=0.3))
+lines(pacurve$Age,pacurve$pY,col=cols[1])
+
+# nulliparous
+points(jitter(npcurve$Age),npcurve$Y,pch=16,cex=0.5,col=alpha(cols[2],alpha=0.3))
+lines(npcurve$Age,npcurve$pY,col=cols[2])
+
+# group labels
+text(40,pacurve$pY[length(pacurve$pY)],"Parous", col=cols[1],cex=1,adj=0)
+text(40,npcurve$pY[length(npcurve$pY)],"Nulliparous", col=cols[2],cex=1,adj=0)
+
+
+## Seroprotection by age category
+ytics <- seq(0,1,by=0.2)
+op <-par(mar=c(4,4,2,1)+0.1)
+xc <- 1:5
+x1s <- xc-0.1
+x2s <- xc+0.1
+plot(xc,xc,type="n",yaxt="n",xaxt="n",bty="n",ylim=c(0,1),xlim=c(0.5,5.5),xlab="",ylab="")
+axis(2,at=ytics,labels=sprintf("%1.0f",ytics*100),las=1)
+mtext(c("15-19","20-24","25-29","30-34","35-39"),at=xc,side=1,line=1,las=1,cex=1.1)
+mtext("Age category (years)",side=1,line=2.5,las=1)
+mtext("Seroprotected (%)",side=2,line=2.5)
+mtext("Tetanus seroprotected (%)",side=3,line=0,adj=0)
+
+arrows(x0=x1s,y0=unlist(EYxp_p[3,]),y1=unlist(EYxp_p[4,]),angle=90,length=0.05,code=3,col=cols[1])
+points(x1s,unlist(EYxp_p[1,]),pch=19,bg="white",col=cols[1])
+
+arrows(x0=x2s,y0=unlist(EYxp_n[3,]),y1=unlist(EYxp_n[4,]),angle=90,length=0.05,code=3,col=cols[2])
+
+points(x2s,unlist(EYxp_n[1,]),pch=21,bg="white",col=cols[2])
+
+
+# group labels
+text(x=x1s[2],y=unlist(EYxp_p[1,2]),"Parous", col=cols[1],cex=1,pos=2,adj=1)
+text(x=x2s[1],y=unlist(EYxp_n[1,1]),"Nulliparous",col=cols[2],cex=1,pos=4,adj=0)
+
+
+par(op)
+lo <- layout(mat=matrix(1))
+
+
+```
+
+```{r tetanus figure pdf, eval=TRUE, include=FALSE,warning=FALSE}
+pdf("~/serosurveillance-cambodia/results/cambodia-tetanus-parity.pdf",width=9,height=4)
+lo <- layout(mat=matrix(1:2,nrow=1,ncol=2),widths=c(1,1))
+
+cols=c(cblue,cgreen)
+
+
+## Age dependent mean response
+# jitter the ages just a little to improve visualization
+ytics <- 0:5
+xtics <- seq(15,40,by=5)
+op <-par(mar=c(4,4,2,4)+0.1,xpd=T)
+plot(1,1,type="n",yaxt="n",xaxt="n",bty="n",ylim=c(0,5),xlim=range(xtics),xlab="",ylab="")
+axis(2,at=ytics,labels=c(
+  expression(10^0),
+  expression(10^1),
+  expression(10^2),
+  expression(10^3),
+  expression(10^4),
+  expression(10^5)), las=1,cex.axis=1.25)
+axis(1,at=xtics,las=1,cex.axis=1.25)
+mtext("Age (years)",side=1,line=2.5,las=1)
+mtext("Luminex response (MFI-bg)",side=2,line=3)
+mtext("Tetanus age-dependent mean response",side=3,line=0,adj=0)
+
+# parous
+points(jitter(pacurve$Age),pacurve$Y,pch=16,cex=0.5,col=alpha(cols[1],alpha=0.3))
+lines(pacurve$Age,pacurve$pY,col=cols[1])
+
+# nulliparous
+points(jitter(npcurve$Age),npcurve$Y,pch=16,cex=0.5,col=alpha(cols[2],alpha=0.3))
+lines(npcurve$Age,npcurve$pY,col=cols[2])
+
+# group labels
+text(40,pacurve$pY[length(pacurve$pY)],"Parous", col=cols[1],cex=1,adj=0)
+text(40,npcurve$pY[length(npcurve$pY)],"Nulliparous", col=cols[2],cex=1,adj=0)
+
+
+## Seroprotection by age category
+ytics <- seq(0,1,by=0.2)
+op <-par(mar=c(4,4,2,1)+0.1)
+xc <- 1:5
+x1s <- xc-0.1
+x2s <- xc+0.1
+plot(xc,xc,type="n",yaxt="n",xaxt="n",bty="n",ylim=c(0,1),xlim=c(0.5,5.5),xlab="",ylab="")
+axis(2,at=ytics,labels=sprintf("%1.0f",ytics*100),las=1)
+mtext(c("15-19","20-24","25-29","30-34","35-39"),at=xc,side=1,line=1,las=1,cex=1.1)
+mtext("Age category (years)",side=1,line=2.5,las=1)
+mtext("Seroprotected (%)",side=2,line=2.5)
+mtext("Tetanus seroprotected (%)",side=3,line=0,adj=0)
+
+arrows(x0=x1s,y0=unlist(EYxp_p[3,]),y1=unlist(EYxp_p[4,]),angle=90,length=0.05,code=3,col=cols[1])
+points(x1s,unlist(EYxp_p[1,]),pch=19,bg="white",col=cols[1])
+
+arrows(x0=x2s,y0=unlist(EYxp_n[3,]),y1=unlist(EYxp_n[4,]),angle=90,length=0.05,code=3,col=cols[2])
+
+points(x2s,unlist(EYxp_n[1,]),pch=21,bg="white",col=cols[2])
+
+
+# group labels
+text(x=x1s[2],y=unlist(EYxp_p[1,2]),"Parous", col=cols[1],cex=1,pos=2,adj=1)
+text(x=x2s[1],y=unlist(EYxp_n[1,1]),"Nulliparous",col=cols[2],cex=1,pos=4,adj=0)
+
+
+par(op)
+lo <- layout(mat=matrix(1))
+dev.off()
+```
+
+# Pairs Plot
+
+This analysis summarizes the relationship between pairs of antibody responses to parasitic diseases, using means in each of the 100 sampling clusters.  We subset the analysis to just 6 antibodies for parsimony in the figure. For example, there is redundancy to large degree among multiple antibodies to _W. bancrofti_ (Wb123, Bm14, Bm33), which causes lymphatic filariasis. So we only included Wb123.
+
+## Estimate cluster-level means
+
+```{r pairs dm}
+#----------------------------------
+# subset to MBA luminex MFI
+# NTDs and Malaria
+# exclude redudant antigens for LF
+# to save space
+#----------------------------------
+mbavars <- c("sag2a","nie","t24","wb123","pvmsp19","pfmsp19")
+
+mbalabs <- c('Toxoplasma\ngondii\n SAG2A','Strongyloides\nstercoralis\nNIE','Taenia\nsolium\nT24H','Lymphatic\nfilariasis\nWb123','Plasmodium\nvivax\nMSP1-19','Plasmodium\nfalciparum\nMSP1-19')
+
+d2 <- subset(d,select=c("psuid","age",mbavars))
+
+
+#----------------------------------
+# count and recode values <=0 to 1
+#----------------------------------
+apply(d2[mbavars],2,function(x) table(x<=0) )
+for(vv in mbavars) {
+  d2[vv][d2[vv]<=0]<-1
+}
+#----------------------------------
+# convert values to log10 scale
+#----------------------------------
+for(vv in mbavars) {
+  d2[vv] <- log10(d2[vv])
+}
+
+#----------------------------------
+# estimate cluster-level means
+#----------------------------------
+cld <- d2 %>%
+  group_by(psuid) %>%
+  summarize_all(.,mean)
+
+```
+
+## Figure of results
+
+This is Figure 2A in the manuscript.  In the bottom panel, it includes correlation ellipses that provide a visual representation of the pearson correlation between cluster level means (see the `myellipse` function).  
+
+See these two articles for further motivation of the correlation ellipses (implemented in the `ellipse` package, loaded above)
+
+Murdoch DJ, Chow ED. A Graphical Display of Large Correlation Matrices. Am Stat. 1996;50: 178–180.
+
+Rodgers JL, Nicewander WA. Thirteen Ways to Look at the Correlation Coefficient. Am Stat. 1988;42: 59–66.
+
+The top panel includes scatter plots between antibodies, and smooth, nonparametric locally weighted regression (loess) fits that are trimmed to avoid edge effects  (see the `scatterlowess` function).
+
+There is a hidden code chunk that saves a PDF version (download the .Rmd file from the top of this notebook for the full source code).
+
+```{r cambodia pairs plot,fig.height=8,fig.width=8}
+
+# get correlations to make color categories
+# (could be a better way to do this)
+corrmatrix <-cor(cld[mbavars],method="pearson")
+corr <-corrmatrix[upper.tri(corrmatrix)]
+colgroup <-cut(corr,9,labels=F)
+brewcols <- brewer.pal(9,"BuGn")
+cols<-brewcols[colgroup]
+
+## lower panel function
+myellipse<-function(x,y,...){
+  maxx <- max(x,na.rm=TRUE)
+  minx <- min(x,na.rm=TRUE)
+  maxy <- max(y,na.rm=TRUE)
+  miny <- min(y,na.rm=TRUE)
+  midx <- (maxx+minx)/2
+  midy <- (maxy+miny)/2
+  corxy <- cor(x,y,method="pearson")
+  xyc <-sprintf("%1.2f",corxy)
+  xyc[grep("NA",xyc)]<-""
+  exy <- ellipse(corxy,centre=c(midx,midy),scale=c((maxx-minx)/6,(maxy-miny)/6))
+  polygon(exy,col=alpha(cols[abs(corr-corxy)<0.0000001][1],alpha=0.5))
+  lines(exy)
+  if(!is.na(corxy)) {
+    if(corxy<0.9) {
+      text(midx,midy,xyc,cex=1.2)
+    } else{
+      text(maxx,midy-((maxy-miny)/3),xyc,cex=1.2,adj=1)
+    }
+  }
+  
+}
+
+## upper panel function
+scatterlowess<-function(x,y,...){
+  points(x,y,pch=19,cex=0.5,col=alpha('black',alpha=0.3))
+  # lines(lowess(y~x),col=brewcols[7])
+  # drop the first and last obs to reduce edge effects
+  # x and y objects from lowess are sorted by x
+  lfit <- lowess(y~x)
+  lines(lfit$x[-c(1,length(lfit$x))],lfit$y[-c(1,length(lfit$x))],col=brewcols[7],lwd=1.5)
+}
+
+## pairs plot
+pairs(cld[mbavars],labels=mbalabs,cex=0.5,las=1,
+      upper.panel=scatterlowess,
+      lower.panel=myellipse
+      )
+mtext(expression(paste(log[10],"  Luminex response (MFI-bg)")),side=4,line=0.9)
+```
+
+```{r cambodia pairs pdf, eval=TRUE,echo=FALSE,warnings=FALSE}
+pdf("~/serosurveillance-cambodia/results/cambodia-cluster-pairs-plot.pdf",width=10,height=10)
+pairs(cld[mbavars],labels=mbalabs,cex=0.5,las=1,
+      upper.panel=scatterlowess,
+      lower.panel=myellipse
+      )
+mtext(expression(paste(log[10],"  Luminex response (MFI-bg)")),side=4,line=0.9)
+dev.off()
+```
+
+
+# Heatmap
+
+This section of the analysis creates a heatmap of cluster-level mean antibody levels (log10 scale).  The rows of the heatmap are different antibodies, and the columns are individual sampling clusters.  The sampling clusters are stratified by the 5 regions of the country (which drove the original design), and within region they are sorted by the mean antibody level across the parasitic diseases. 
+
+## Calculate means
+```{r heatmap dm}
+#----------------------------------
+# subset data to antibodies
+#----------------------------------
+mbavars <- c("ttmb","sag2a","nie","t24","wb123","bm14","bm33","pvmsp19","pfmsp19")
+d3 <- subset(d,select=c("region","psuid",mbavars)) 
+
+#----------------------------------
+# count and recode values <=0 to 1
+#----------------------------------
+apply(d3[mbavars],2,function(x) table(x<=0) )
+for(vv in mbavars) {
+  d3[vv][d[vv]<=0]<-1
+}
+#----------------------------------
+# convert values to log10 scale
+#----------------------------------
+for(vv in mbavars) {
+  d3[vv] <- log10(d3[vv])
+}
+
+#----------------------------------
+# group data by region and cluster 
+# estimate means
+#----------------------------------
+d4 <- d3 %>%
+  group_by(region,psuid) %>%
+  summarize_all(mean)
+
+#----------------------------------
+# calculate mean antibody response
+# (used for sorting indivs in heatmap)
+# exclude tetanus since scale for
+# tetanus is reversed (want high mfi)
+#----------------------------------
+d4$abmean <- rowMeans(d4[mbavars[!(mbavars %in% "ttmb")]])
+d4 <- d4 %>% 
+  group_by(region) %>%
+  arrange(region,abmean) %>%
+  mutate(indivrank = 1:n())
+
+#----------------------------------
+# gather data into long format
+# for plotting, and sort by 
+#----------------------------------
+dlong <- gather(d4,antigen,mfi,-region,-psuid,-abmean,-indivrank)  %>%
+  arrange(region,indivrank)
+
+#----------------------------------
+# format factors for plotting
+#----------------------------------
+levels(dlong$region) <- c("Phnom Penh","Southeast","Southwest","West","North")
+
+
+Abnames <- c("Tetanus toxiod",
+             "Toxoplasma gondii SAG2A",
+             "Strongyloides stercoralis NIE",
+             "Taenia solium T24H",
+             "Lymphatic filariasis Wb123",
+             "Lymphatic filariasis Bm14",
+             "Lymphatic filariasis Bm33",
+             "Plasmodium vivax MSP-1(19)",
+             "Plasmodium falciparum MSP1(19)")
+
+dlong$ab <- factor(dlong$antigen,levels=rev(mbavars),labels=rev(Abnames))
+
+dlong$abgroup <- factor(NA,levels=c("VPDs","Malaria","NTDs"))
+dlong$abgroup[dlong$antigen %in% c("ttmb")] <-"VPDs"
+dlong$abgroup[dlong$antigen %in% c("pvmsp19","pfmsp19")] <-"Malaria"
+dlong$abgroup[dlong$antigen %in% c("sag2a","nie","t24","wb123","bm14","bm33")] <-"NTDs"
+
+
+
+```
+
+## Figure of results
+```{r cambodia heatmap fig, fig.width=8,fig.height=4}
+#----------------------------------
+# make a heatmap of all antigens
+# inspiration: http://www.roymfrancis.com/a-guide-to-elegant-tiled-heatmaps-in-r/
+#----------------------------------
+
+#define a colour for fonts
+textcol <- "grey20"
+
+p <- ggplot(dlong,aes(x=indivrank,y=ab,fill=mfi)) +
+  #facet over village
+  facet_grid(abgroup~region,scales='free',space='free',switch="y")+
+  
+  #add border white colour of line thickness 0.25
+  geom_tile(colour="white",size=0.25)+
+  #remove y axis labels, 
+  labs(x="Clusters are stratified by region then sorted by mean antibody response",y="",title="")+
+  #remove extra space
+  scale_y_discrete(expand=c(0,0),position="right")+
+  scale_x_continuous(expand=c(0,0))+
+  # scale_x_discrete(expand=c(0,0),
+  #                  breaks=1:9,labels=1:9)+
+  #change the scale_fill_manual
+  scale_fill_distiller(palette="YlGnBu",na.value="grey90",
+                       direction=0,
+                       guide=guide_colorbar(title="log10\nMFI-bg",face='bold'))+
+  # scale_fill_manual(values=rev(brewer.pal(7,"YlGnBu")),na.value="grey90",guide=guide_colorbar(title="log10\nMFI-bg",face='bold'))+
+  #one unit on x-axis is equal to one unit on y-axis.
+  #equal aspect ratio x and y axis
+  coord_equal()+
+  #set base size for all font elements
+  theme_grey(base_size=10)+
+  #theme options
+  theme(
+    
+    legend.title=element_text(color=textcol,size=8),
+    legend.position = "left",
+    #change legend text properties
+    legend.text=element_text(colour=textcol,size=7,face="bold"),
+    #change legend key height
+    legend.key.height=grid::unit(0.8,"cm"),
+    #set a slim legend
+    legend.key.width=grid::unit(0.4,"cm"),
+    
+    #set remove x axis ticks
+    axis.title.x=element_text(hjust=0),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    #set y axis text colour and adjust vertical justification
+    axis.text.y=element_text(size=10,vjust = 0.2,colour=textcol),
+    #change axis ticks thickness
+    axis.ticks=element_line(size=0.4),
+    
+    #change title font, size, colour and justification
+    plot.title=element_text(colour=textcol,hjust=0,size=12,face="bold"),
+    #adjust facet labels
+    strip.text.x = element_text(size=10),
+    strip.text.y = element_text(size=8),
+    #remove plot background
+    plot.background=element_blank(),
+    #remove plot border
+    panel.border=element_blank(),
+    #remove plot margins
+    # plot.margin=margin(grid::unit(1,"cm"))
+  )
+
+p
+
+# save a PDF file for manuscript
+ggsave(filename="~/serosurveillance-cambodia/results/cambodia-Ab-heatmap-clusters.pdf",plot = p,device='pdf',width=13,height=4)
+
+
+```
+
+
+# Session Info
+```{r session info}
+sessionInfo()
+```
+
+
+

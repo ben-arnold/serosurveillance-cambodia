@@ -1,7 +1,7 @@
 
 # serosurveillance-cambodia
 
-This repository includes all scripts used for the analysis and data visualization for the article:
+This repository includes the computational notebook used for the analysis and data visualization for the article:
 
 Arnold BF, Scobie HM, Priest JW, Lammie PJ. Serologic surveillance of population immunity and disease transmission. _Emerging Infectious Diseases_, 2018; 
 https://doi.org/10.3201/eid2407.171928

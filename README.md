@@ -3,8 +3,7 @@
 
 This repository includes the computational notebook used for the analysis and data visualization for the article:
 
-Arnold BF, Scobie HM, Priest JW, Lammie PJ. Serologic surveillance of population immunity and disease transmission. _Emerging Infectious Diseases_, 2018; 
-https://doi.org/10.3201/eid2407.171928
+Arnold BF, Scobie HM, Priest JW, Lammie PJ. Integrated Serologic Surveillance of Population Immunity and Disease Transmission, _Emerging Infectious Diseases_, 2018; 24(7):1188-1194. https://www.ncbi.nlm.nih.gov/pubmed/29912680 
 
 The scripts rely on data that is archived in this Open Science Framework repository: [https://osf.io/2kr8b/](https://osf.io/2kr8b/)
 
